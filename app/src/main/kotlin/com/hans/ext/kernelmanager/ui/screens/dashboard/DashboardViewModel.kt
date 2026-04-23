@@ -252,8 +252,6 @@ class DashboardViewModel : ViewModel() {
             }
         }
     }
-        }
-    }
 
     /**
      * Diagnostic Logging.
