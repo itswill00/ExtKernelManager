@@ -3,6 +3,8 @@ package com.hans.ext.kernelmanager.hal.intelligence
 import com.hans.ext.kernelmanager.util.SmartShell
 import android.util.Log
 import java.io.File
+import org.json.JSONObject
+import org.json.JSONArray
 
 /**
  * NodeSignature: Defines a hardware interface pattern for discovery.
@@ -55,6 +57,7 @@ data class SovereignRegistry(
  */
 object SystemDiscovery {
     private const val TAG = "SovereignOmniOracle"
+    private const val CACHE_PATH = "/data/local/tmp/ekm_registry_cache.json"
 
     /**
      * @Volatile ensures that the latest written value is immediately visible
@@ -68,9 +71,33 @@ object SystemDiscovery {
      * Executes the full-spectrum hardware discovery sequence.
      * This is an intensive operation that builds a complete system awareness map.
      */
-    fun discover(): SovereignRegistry {
+    fun discover(force: Boolean = false): SovereignRegistry {
         log("--- Initiating Omni-Oracle Full Spectrum Discovery ---")
         
+        val currentKernel = SmartShell.sh("uname -r").trim()
+        val currentBuild = SmartShell.sh("getprop ro.build.display.id").trim()
+        val fingerprint = "$currentKernel|$currentBuild"
+
+        if (!force && SmartShell.sh("ls $CACHE_PATH").trim() == CACHE_PATH) {
+            val cacheRaw = SmartShell.read(CACHE_PATH)
+            if (cacheRaw.isNotEmpty()) {
+                try {
+                    val cacheJson = JSONObject(cacheRaw)
+                    val cacheFingerprint = cacheJson.optString("cache_fingerprint", "")
+                    if (cacheFingerprint == fingerprint) {
+                        log("Cache hit! Fingerprint verified. Loading registry from cache.")
+                        activeRegistry = parseRegistry(cacheJson)
+                        return activeRegistry
+                    } else {
+                        log("Cache fingerprint mismatch. Current: $fingerprint, Cache: $cacheFingerprint. Forcing rescan.")
+                    }
+                } catch (e: Exception) {
+                    log("Failed to parse cache: ${e.message}")
+                }
+            }
+        }
+
+        log("Performing deep hardware discovery...")
         val heritage = identifyHeritage()
         log("Heritage Established: ${heritage.brand} ${heritage.model} [${heritage.tier}]")
 
@@ -152,9 +179,136 @@ object SystemDiscovery {
             bootloaderVersion = bootloader,
             deviceCodename = codename
         )
+        
+        // Cache the newly discovered registry
+        try {
+            val newJson = serializeRegistry(activeRegistry, fingerprint)
+            SmartShell.write(CACHE_PATH, newJson.toString())
+            SmartShell.sh("chmod 666 $CACHE_PATH")
+            log("SovereignRegistry successfully cached to $CACHE_PATH")
+        } catch (e: Exception) {
+            log("Failed to write cache: ${e.message}")
+        }
 
         log("Omni-Oracle Sequence Complete. Coverage: ${activeRegistry.interfaces.size + activeRegistry.subsystems.values.sumOf { it.size }} interfaces.")
         return activeRegistry
+    }
+
+    private fun serializeRegistry(reg: SovereignRegistry, fingerprint: String): JSONObject {
+        val root = JSONObject()
+        root.put("cache_fingerprint", fingerprint)
+        
+        val h = JSONObject()
+        h.put("brand", reg.heritage.brand)
+        h.put("model", reg.heritage.model)
+        h.put("codename", reg.heritage.codename)
+        h.put("arch", reg.heritage.arch)
+        h.put("tier", reg.heritage.tier)
+        h.put("vendorFeatures", JSONArray(reg.heritage.vendorFeatures))
+        root.put("heritage", h)
+        
+        val ifaces = JSONObject()
+        reg.interfaces.forEach { (k, v) -> ifaces.put(k, v) }
+        root.put("interfaces", ifaces)
+        
+        root.put("cpuPolicies", JSONArray(reg.cpuPolicies))
+        
+        val cpuCore = JSONObject()
+        reg.cpuCoreMap.forEach { (k, v) -> cpuCore.put(k.toString(), v) }
+        root.put("cpuCoreMap", cpuCore)
+        
+        val tz = JSONObject()
+        reg.thermalZones.forEach { (k, v) -> tz.put(k, v) }
+        root.put("thermalZones", tz)
+        
+        val subs = JSONObject()
+        reg.subsystems.forEach { (cat, map) ->
+            val subMap = JSONObject()
+            map.forEach { (k, v) -> subMap.put(k, v) }
+            subs.put(cat, subMap)
+        }
+        root.put("subsystems", subs)
+        
+        root.put("totalCores", reg.totalCores)
+        root.put("socModel", reg.socModel)
+        
+        val kMeta = JSONObject()
+        reg.kernelMetadata.forEach { (k, v) -> kMeta.put(k, v) }
+        root.put("kernelMetadata", kMeta)
+        
+        root.put("marketName", reg.marketName)
+        root.put("buildNumber", reg.buildNumber)
+        root.put("selinuxStatus", reg.selinuxStatus)
+        root.put("basebandVersion", reg.basebandVersion)
+        root.put("bootloaderVersion", reg.bootloaderVersion)
+        root.put("deviceCodename", reg.deviceCodename)
+        
+        return root
+    }
+
+    private fun parseRegistry(root: JSONObject): SovereignRegistry {
+        val h = root.getJSONObject("heritage")
+        val vendorFeatures = mutableListOf<String>()
+        val vfArr = h.getJSONArray("vendorFeatures")
+        for (i in 0 until vfArr.length()) vendorFeatures.add(vfArr.getString(i))
+        val heritage = ChipsetHeritage(
+            h.getString("brand"), h.getString("model"), h.getString("codename"),
+            h.getString("arch"), h.getString("tier"), vendorFeatures
+        )
+        
+        val interfaces = mutableMapOf<String, String>()
+        val ifaces = root.getJSONObject("interfaces")
+        ifaces.keys().forEach { interfaces[it] = ifaces.getString(it) }
+        
+        val cpuPolicies = mutableListOf<Int>()
+        val polArr = root.getJSONArray("cpuPolicies")
+        for (i in 0 until polArr.length()) cpuPolicies.add(polArr.getInt(i))
+        
+        val cpuCoreMap = mutableMapOf<Int, String>()
+        val ccMap = root.getJSONObject("cpuCoreMap")
+        ccMap.keys().forEach { cpuCoreMap[it.toInt()] = ccMap.getString(it) }
+        
+        val thermalZones = mutableMapOf<String, String>()
+        val tzMap = root.getJSONObject("thermalZones")
+        tzMap.keys().forEach { thermalZones[it] = tzMap.getString(it) }
+        
+        val subsystems = mutableMapOf<String, Map<String, String>>()
+        val subs = root.getJSONObject("subsystems")
+        subs.keys().forEach { cat ->
+            val subObj = subs.getJSONObject(cat)
+            val subMap = mutableMapOf<String, String>()
+            subObj.keys().forEach { subMap[it] = subObj.getString(it) }
+            subsystems[cat] = subMap
+        }
+        
+        val kernelMetadata = mutableMapOf<String, String>()
+        val kMeta = root.getJSONObject("kernelMetadata")
+        kMeta.keys().forEach { kernelMetadata[it] = kMeta.getString(it) }
+        
+        return SovereignRegistry(
+            heritage = heritage,
+            interfaces = interfaces,
+            cpuPolicies = cpuPolicies,
+            cpuCoreMap = cpuCoreMap,
+            thermalZones = thermalZones,
+            subsystems = subsystems,
+            totalCores = root.getInt("totalCores"),
+            socModel = root.getString("socModel"),
+            kernelMetadata = kernelMetadata,
+            marketName = root.getString("marketName"),
+            buildNumber = root.getString("buildNumber"),
+            selinuxStatus = root.getString("selinuxStatus"),
+            basebandVersion = root.getString("basebandVersion"),
+            bootloaderVersion = root.getString("bootloaderVersion"),
+            deviceCodename = root.getString("deviceCodename")
+        )
+    }
+
+    /**
+     * Re-runs discovery forcefully bypassing cache.
+     */
+    fun refreshRegistry() {
+        discover(force = true)
     }
 
     /**
@@ -287,7 +441,38 @@ object SystemDiscovery {
     private fun String.containsAny(vararg tokens: String) = tokens.any { this.contains(it) }
 
     /** Maps raw platform strings to human-readable SoC labels for common devices. */
-    private fun resolveSocLabel(platform: String): String = when {
+    /**
+     * Resolves the marketing label for an SoC platform.
+     * Uses a multi-stage approach: Properties -> /proc/cpuinfo -> Heuristic Mapping.
+     */
+    private fun resolveSocLabel(platform: String): String {
+        // Stage 1: Vendor-specific properties (Highest Signal)
+        val props = listOf(
+            "ro.soc.model",
+            "ro.chipname",
+            "ro.product.board",
+            "ro.hardware.chipname",
+            "ro.mediatek.platform"
+        )
+        for (prop in props) {
+            val v = SmartShell.sh("getprop $prop").trim()
+            if (v.length > 5 && !v.contains(Regex("[0-9a-f]{8}"))) { // Avoid hashes
+                if (v.containsAny("Snapdragon", "Helio", "Dimensity", "Exynos", "Unisoc", "Google Tensor")) {
+                    return v
+                }
+            }
+        }
+
+        // Stage 2: /proc/cpuinfo Hardware Field
+        val cpuHardware = SmartShell.sh("grep Hardware /proc/cpuinfo").substringAfter(":").trim()
+        if (cpuHardware.isNotEmpty() && !cpuHardware.contains("Generic") && cpuHardware.length > 4) {
+            if (cpuHardware.containsAny("Snapdragon", "Helio", "Dimensity", "Exynos", "MT", "SM", "SDM")) {
+                return cpuHardware
+            }
+        }
+
+        // Stage 3: Heuristic Mapping for common platforms
+        return when {
         // Snapdragon 8 Gen series
         platform == "kalama"    -> "Snapdragon 8 Gen 2"
         platform == "pineapple" -> "Snapdragon 8 Gen 3"
@@ -323,6 +508,7 @@ object SystemDiscovery {
         platform == "exynos990" -> "Exynos 990"
         platform == "exynos980" -> "Exynos 980"
         else                    -> ""   // caller will use platform directly
+        }
     }
 
     private fun resolveQcomTier(platform: String, model: String): String {
@@ -465,120 +651,104 @@ object SystemDiscovery {
      */
     private fun scanGpuSubsystem(): Map<String, String> {
         val map = mutableMapOf<String, String>()
-
-        // ── Adreno / KGSL (Qualcomm) ────────────────────────────────────────
-        // Frekuensi aktual ada di devfreq wrapper, bukan di kgsl root langsung
-        val adrenoCandidates = listOf(
-            "/sys/class/kgsl/kgsl-3d0",                      // sysfs class standard
-            "/sys/devices/platform/kgsl-3d0.0/kgsl/kgsl-3d0",
-            "/sys/devices/soc/kgsl-3d0",
-            "/sys/devices/platform/soc/kgsl-3d0"
+        
+        // 1. Golden Path Priority (High Signal)
+        val goldenRoots = listOf(
+            "/sys/class/kgsl/kgsl-3d0",                      // Adreno Standard
+            "/sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0", // Adreno Modern
+            "/sys/devices/platform/soc/5000000.qcom,kgsl-3d0/kgsl/kgsl-3d0", // Adreno Newer
+            "/sys/devices/platform/mali.0",                  // Mali Standard
+            "/sys/devices/13000000.mali",                    // Mali Exynos/Older MTK
+            "/sys/devices/11400000.mali",                    // Mali Older Exynos
+            "/sys/class/devfreq/13000000.mali",              // Mali Devfreq
+            "/sys/class/devfreq/gpumcu",                     // MTK Modern
+            "/sys/class/devfreq/mali",                       // MTK Common
+            "/sys/kernel/gpu"                                // Samsung Exynos
         )
-        val adrenoRoot = adrenoCandidates.find { nodeExists(it) }
-        if (adrenoRoot != null) {
-            map["root"] = adrenoRoot
-            map["brand"] = "Adreno"
-            // Frekuensi KGSL: devfreq wrapper adalah primary, fallback ke node langsung
-            val freqNodes = listOf(
-                "devfreq/kgsl-3d0/cur_freq",   // Kernel 5.4+
-                "devfreq/cur_freq",
-                "kgsl/kgsl-3d0/devfreq/cur_freq",
-                "cur_freq"                       // Beberapa kernel lama
+        
+        var bestRoot = goldenRoots.find { nodeExists(it) }
+
+        // 2. Dynamic Fallback if Golden Paths fail (Deep Scan)
+        if (bestRoot == null) {
+            val dynamicRoots = listOf("/sys/class/kgsl", "/sys/class/devfreq", "/sys/devices/platform")
+            val candidates = mutableListOf<String>()
+            
+            dynamicRoots.forEach { root ->
+                if (nodeExists(root)) {
+                    val items = SmartShell.sh("ls $root 2>/dev/null").split(Regex("\\s+"))
+                    // Wide filter: catch anything that could be graphics related
+                    val keywords = listOf("gpu", "mali", "kgsl", "pvr", "3d0", "graphics", "img", "gpumcu", "sgx")
+                    items.filter { item -> keywords.any { item.contains(it, ignoreCase = true) } }
+                        .forEach { candidates.add("$root/$it") }
+                }
+            }
+
+            // High-Resiliency Filter: Scan ALL devfreq entries for "GPU-like" frequency signatures
+            if (candidates.isEmpty() && nodeExists("/sys/class/devfreq")) {
+                val allDevfreq = SmartShell.sh("ls /sys/class/devfreq").split(Regex("\\s+"))
+                allDevfreq.forEach { entry ->
+                    val path = "/sys/class/devfreq/$entry"
+                    val freqs = SmartShell.read("$path/available_frequencies")
+                    // Heuristic: If max frequency is > 200MHz, it's likely a GPU or DDR, but GPU usually has more steps
+                    if (freqs.split(" ").size > 3) {
+                        val max = freqs.split(" ").mapNotNull { it.toLongOrNull() }.maxOrNull() ?: 0
+                        if (max > 200000000) { // > 200MHz
+                            candidates.add(path)
+                        }
+                    }
+                }
+            }
+
+            // Ultra-Deep 플랫폼 스캔 (Device Tree Hints)
+            if (candidates.isEmpty()) {
+                val dtHint = SmartShell.sh("find /sys/devices/platform -name \"*gpu*\" -type d -maxdepth 3 | head -n 1")
+                if (dtHint.isNotEmpty()) candidates.add(dtHint)
+            }
+
+            bestRoot = candidates.firstOrNull { r ->
+                nodeExists("$r/cur_freq") || nodeExists("$r/governor") || 
+                nodeExists("$r/available_frequencies") || nodeExists("$r/gpuclk")
+            }
+        }
+
+        if (bestRoot != null) {
+            map["root"] = bestRoot
+            map["brand"] = when {
+                bestRoot.contains("kgsl") || bestRoot.contains("adreno") -> "Adreno"
+                bestRoot.contains("mali") || bestRoot.contains("gpumcu") -> "Mali"
+                bestRoot.contains("pvr") || bestRoot.contains("img") -> "PowerVR"
+                else -> "Generic GPU"
+            }
+
+            // 3. Robust Signature Mapping
+            val nodeSignatures = mapOf(
+                "cur_freq"              to listOf("cur_freq", "gpuclk", "clock", "clock_rate", "devfreq/cur_freq", "device/cur_freq"),
+                "max_freq"              to listOf("max_freq", "max_gpuclk", "devfreq/max_freq", "scaling_max_freq"),
+                "min_freq"              to listOf("min_freq", "min_gpuclk", "devfreq/min_freq", "scaling_min_freq"),
+                "governor"              to listOf("governor", "devfreq/governor", "default_pwrlevel", "dvfs_governor"),
+                "available_frequencies" to listOf("available_frequencies", "gpu_available_frequencies", "devfreq/available_frequencies"),
+                "load"                  to listOf("gpu_busy_percentage", "gpubusy", "gpu_load", "utilization", "load"),
+                "available_governors"   to listOf("available_governors", "devfreq/available_governors")
             )
-            freqNodes.find { nodeExists("$adrenoRoot/$it") }
-                ?.let { map["cur_freq"] = "$adrenoRoot/$it" }
 
-            // Max freq
-            listOf("devfreq/kgsl-3d0/max_freq", "devfreq/max_freq", "max_freq").forEach { n ->
-                if (!map.containsKey("max_freq") && nodeExists("$adrenoRoot/$n"))
-                    map["max_freq"] = "$adrenoRoot/$n"
+            nodeSignatures.forEach { (key, aliases) ->
+                val found = aliases.firstNotNullOfOrNull { alias ->
+                    val p = "$bestRoot/$alias"
+                    if (nodeExists(p)) p else null
+                }
+                if (found != null) map[key] = found
             }
-            // Min freq
-            listOf("devfreq/kgsl-3d0/min_freq", "devfreq/min_freq", "min_freq").forEach { n ->
-                if (!map.containsKey("min_freq") && nodeExists("$adrenoRoot/$n"))
-                    map["min_freq"] = "$adrenoRoot/$n"
-            }
-            // Governor
-            listOf("devfreq/kgsl-3d0/governor", "devfreq/governor", "governor").forEach { n ->
-                if (!map.containsKey("governor") && nodeExists("$adrenoRoot/$n"))
-                    map["governor"] = "$adrenoRoot/$n"
-            }
-            // Available freqs
-            listOf("devfreq/kgsl-3d0/available_frequencies", "devfreq/available_frequencies", "available_frequencies").forEach { n ->
-                if (!map.containsKey("available_frequencies") && nodeExists("$adrenoRoot/$n"))
-                    map["available_frequencies"] = "$adrenoRoot/$n"
-            }
-            log("GPU: Adreno path resolved at $adrenoRoot")
-            return map
-        }
-
-        // ── Mali (MediaTek / Exynos) ─────────────────────────────────────────
-        val maliCandidates = listOf(
-            "/sys/devices/platform/mali.0",
-            "/sys/devices/platform/13000000.mali",  // Exynos common base address
-            "/sys/devices/platform/11000000.mali",
-            "/sys/devices/platform/fc400000.mali",
-            "/sys/bus/platform/drivers/mali/mali",
-            "/sys/class/devfreq/mali",              // MTK Mali via devfreq
-            "/sys/class/devfreq/13000000.mali",
-            "/sys/class/devfreq/11000000.mali",
-            "/sys/kernel/gpu"                       // Samsung exynos fallback
-        )
-        val maliRoot = maliCandidates.find { nodeExists(it) }
-        if (maliRoot != null) {
-            map["root"] = maliRoot
-            map["brand"] = "Mali"
-            val stdNodes = listOf("cur_freq", "max_freq", "min_freq", "governor",
-                "available_frequencies", "power_policy", "utilization")
-            stdNodes.forEach { node ->
-                // Direct + devfreq sub-path
-                val variants = listOf(node, "devfreq/$node")
-                variants.find { nodeExists("$maliRoot/$it") }
-                    ?.let { map[node] = "$maliRoot/$it" }
-            }
-            log("GPU: Mali path resolved at $maliRoot")
-            return map
-        }
-
-        // ── PowerVR / IMG (older MediaTek) ──────────────────────────────────
-        val pvrCandidates = listOf(
-            "/sys/class/devfreq/13820000.gpu",
-            "/sys/class/devfreq/pvrsrvkm"
-        )
-        val pvrRoot = pvrCandidates.find { nodeExists(it) }
-        if (pvrRoot != null) {
-            map["root"] = pvrRoot
-            map["brand"] = "PowerVR"
-            listOf("cur_freq", "max_freq", "min_freq", "governor", "available_frequencies").forEach { node ->
-                if (nodeExists("$pvrRoot/$node")) map[node] = "$pvrRoot/$node"
-            }
-            log("GPU: PowerVR path resolved at $pvrRoot")
-            return map
-        }
-
-        // ── Generic devfreq scan (fallback for unknown/future vendors) ───────
-        // Scan /sys/class/devfreq/ dan cari entry yang mengandung 'gpu'
-        val devfreqBase = "/sys/class/devfreq"
-        val entries = SmartShell.shLines("ls $devfreqBase 2>/dev/null")
-        val gpuEntry = entries.firstOrNull { e ->
-            e.contains("gpu", ignoreCase = true) ||
-            e.contains("mali", ignoreCase = true) ||
-            e.contains("kgsl", ignoreCase = true) ||
-            e.contains("pvr", ignoreCase = true)
-        }
-        if (gpuEntry != null) {
-            val gpuRoot = "$devfreqBase/$gpuEntry"
-            map["root"] = gpuRoot
-            map["brand"] = "Generic"
-            listOf("cur_freq", "max_freq", "min_freq", "governor", "available_frequencies").forEach { node ->
-                if (nodeExists("$gpuRoot/$node")) map[node] = "$gpuRoot/$node"
-            }
-            log("GPU: Generic devfreq path resolved: $gpuRoot")
+            log("GPU: Discovery successful at $bestRoot")
         } else {
-            log("GPU: No GPU sysfs interface found on this device.")
+            log("GPU: All discovery strategies failed.")
         }
 
         return map
+    }
+
+    private fun findDeepPath(root: String, target: String): String {
+        val res = SmartShell.sh("find $root -maxdepth 4 -name \"*$target*\" -type d | head -n 1").trim()
+        return if (res.isNotEmpty() && nodeExists(res)) res else ""
     }
 
     /**

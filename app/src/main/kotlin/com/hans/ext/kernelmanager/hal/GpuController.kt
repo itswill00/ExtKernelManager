@@ -22,6 +22,343 @@ object GpuController {
     }
 
     /**
+     * Retrieves the precise GPU Renderer name (e.g., Adreno (TM) 740).
+     */
+    fun getRendererName(): String {
+        // Stage 0: Direct Kernel Probing (Most Accurate if available)
+        val kernelPaths = listOf(
+            "/sys/kernel/debug/mali0/gpu_name",
+            "/sys/kernel/debug/mali/gpu_name",
+            "/sys/class/kgsl/kgsl-3d0/gpu_model",
+            "/sys/class/kgsl/kgsl-3d0/devfreq/gpu_model",
+            "/sys/devices/platform/mali.0/gpu_name",
+            "/sys/devices/platform/mali.0/gpuinfo",
+            "/sys/class/devfreq/gpumcu/device/gpuinfo",
+            "/sys/class/devfreq/gpumcu/device/gpu_name",
+            "/sys/kernel/gpu/gpu_model",
+            "/sys/kernel/gpu/gpu_name",
+            "/sys/module/pvrsrvkm/parameters/gpu_name",
+            "/sys/devices/platform/pvr/gpu_name",
+            "/sys/devices/gpu/gpu_name",
+            "/sys/class/drm/card0/device/gpu_name"
+        )
+        for (path in kernelPaths) {
+            if (nodeExists(path)) {
+                val content = SmartShell.read(path).trim()
+                if (content.isNotEmpty() && content.length < 50) return content
+            }
+        }
+
+        // Stage 1: Standard SurfaceFlinger probe
+        val sfLines = SmartShell.shLines("dumpsys SurfaceFlinger")
+        val glesLine = sfLines.find { it.contains("GLES:", ignoreCase = true) || it.contains("Renderer:", ignoreCase = true) }
+        if (glesLine != null) {
+            val name = glesLine.substringAfter(":").substringBefore(",").trim()
+            if (name.isNotEmpty() && name != "null") return name
+        }
+
+        // Stage 1.2: Dumpsys GpuService (Newer Androids)
+        val gpuSvcLines = SmartShell.shLines("dumpsys GpuService")
+        val vendorLine = gpuSvcLines.find { it.contains("GPU Renderer", ignoreCase = true) || it.contains("Renderer:", ignoreCase = true) }
+        if (vendorLine != null) {
+            val name = vendorLine.substringAfter(":").trim()
+            if (name.isNotEmpty() && name != "null" && name != "unknown") return name
+        }
+
+        // Stage 1.5: Dumpsys gfxinfo
+        val gfxLines = SmartShell.shLines("dumpsys gfxinfo")
+        val glLine = gfxLines.find { it.contains("GL_RENDERER", ignoreCase = true) }
+        if (glLine != null) {
+            val name = glLine.substringAfter("=").trim()
+            if (name.isNotEmpty() && name != "null") return name
+        }
+
+        // Stage 1.7: Logcat parsing (Aggressive fallback)
+        val logcat = SmartShell.sh("logcat -d -s Adreno-GSL Mali PVR EGL-main | grep -i 'Renderer' | tail -n 1").trim()
+        if (logcat.isNotEmpty()) {
+            val name = logcat.substringAfter("Renderer").substringAfter(":").trim()
+            if (name.isNotEmpty() && name != "null") return name
+        }
+
+        // Stage 2: Vendor Library Check (Very Reliable)
+        val libs = SmartShell.sh("ls /vendor/lib/egl /system/lib/egl /vendor/lib64/egl /system/lib64/egl 2>/dev/null").lowercase()
+        val libBrand = when {
+            libs.contains("mali")  -> "Mali Graphics Core"
+            libs.contains("adreno") -> "Adreno Graphics Core"
+            libs.contains("pvr")   -> "PowerVR Graphics Core"
+            libs.contains("tegra") -> "Nvidia Tegra GPU"
+            else -> ""
+        }
+        if (libBrand.isNotEmpty()) return libBrand
+
+        // Stage 3.5: Extremely Aggressive Prop Hunting
+        val props = listOf(
+            "ro.hardware.egl", "ro.hardware.vulkan", 
+            "ro.board.platform", "ro.product.board", 
+            "ro.soc.model", "ro.mediatek.platform", 
+            "ro.chipname", "ro.hardware"
+        )
+        val fallbackProp = props.firstNotNullOfOrNull { 
+            SmartShell.sh("getprop $it").trim().takeIf { res -> res.isNotEmpty() && res != "null" && res != "unknown" }
+        }
+        if (fallbackProp != null) return "GPU ($fallbackProp)"
+
+        // Stage 4: Registry Fallback
+        val reg = SystemDiscovery.getRegistry()
+        if (reg.socModel.isNotEmpty()) return "GPU (${reg.socModel})"
+        
+        return "Generic Graphics Core"
+    }
+
+    /**
+     * Retrieves real-time GPU Load percentage.
+     */
+    fun getLoad(): Int {
+        val registryPath = SystemDiscovery.getRegistry().subsystems["GPU"]?.get("load")
+        val raw = if (!registryPath.isNullOrEmpty()) SmartShell.read(registryPath).trim() else ""
+        
+        if (raw.isEmpty()) {
+            // Fallback 1: Manual probe relative to discovered root
+            val root = getGpuPath()
+            val nodes = listOf("gpu_busy_percentage", "gpubusy", "utilization", "load", "busy_percent", "device/load", "device/gpu_busy", "devfreq/gpu_load")
+            var fallbackRaw = nodes.firstNotNullOfOrNull { node ->
+                if (nodeExists("$root/$node")) SmartShell.read("$root/$node").trim().takeIf { it.isNotEmpty() }
+                else null
+            }
+
+            // Fallback 2: Absolute paths for heavily restricted kernels (DebugFS, MTK GED, Exynos, Unisoc)
+            if (fallbackRaw == null) {
+                val absolutePaths = listOf(
+                    // Mali / ARM
+                    "/sys/kernel/debug/mali0/utilization",
+                    "/sys/kernel/debug/mali/utilization",
+                    "/sys/devices/platform/mali.0/utilization",
+                    "/sys/devices/13000000.mali/utilization",
+                    "/sys/devices/11400000.mali/utilization",
+                    "/sys/devices/1c000000.mali/utilization",
+                    "/sys/devices/14ac0000.mali/utilization",
+                    "/sys/devices/18800000.mali/utilization",
+                    "/sys/devices/2d00000.mali/utilization",
+                    "/sys/class/devfreq/mali/device/load",
+                    "/sys/class/devfreq/mali0/device/load",
+                    "/sys/class/devfreq/gpumcu/device/load",
+                    "/sys/kernel/debug/ged/hal/gpu_utilization",
+                    "/sys/module/mali_kbase/parameters/gpu_utilization",
+                    "/sys/module/mali_base/parameters/gpu_utilization",
+                    
+                    // Adreno / Qualcomm
+                    "/sys/class/kgsl/kgsl-3d0/gpubusy",
+                    "/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage",
+                    "/sys/class/kgsl/kgsl-3d0/devfreq/gpu_load",
+                    "/sys/devices/platform/soc/5000000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpubusy",
+                    "/sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpubusy",
+                    "/sys/class/devfreq/soc:qcom,kgsl-3d0/device/gpu_busy_percentage",
+                    "/sys/class/devfreq/soc:qcom,kgsl-3d0/device/load",
+                    
+                    // PowerVR / Imagination
+                    "/sys/module/pvrsrvkm/parameters/gpu_utilization",
+                    "/sys/kernel/debug/pvr/gpu_utilization",
+                    "/sys/devices/platform/pvrsrvkm.0/gpu_utilization",
+                    "/sys/devices/platform/pvr/gpu_utilization",
+                    
+                    // Exynos / Samsung
+                    "/sys/kernel/gpu/gpu_busy",
+                    "/sys/class/devfreq/exynos-bus/device/load",
+                    
+                    // Nvidia Tegra
+                    "/sys/devices/platform/host1x/15810000.nvdisplay/load",
+                    "/sys/devices/57000000.gpu/load",
+                    
+                    // Generic DRM & Misc
+                    "/sys/class/devfreq/gpu/device/load",
+                    "/sys/class/drm/card0/device/gpu_busy",
+                    "/sys/class/drm/card0/device/load"
+                )
+                fallbackRaw = absolutePaths.firstNotNullOfOrNull { path ->
+                    if (nodeExists(path)) SmartShell.read(path).trim().takeIf { it.isNotEmpty() }
+                    else null
+                }
+            }
+            
+            // Fallback 3: Try reading freq to guess load (Hack for entirely locked kernels)
+            if (fallbackRaw == null) {
+                val freq = getCurrentFrequency()
+                val minFreq = getAvailableFrequencies().lastOrNull()?.replace(" MHz", "")?.toIntOrNull() ?: 0
+                val maxFreq = getAvailableFrequencies().firstOrNull()?.replace(" MHz", "")?.toIntOrNull() ?: 1
+                val curFreqNum = freq.replace(" MHz", "").toIntOrNull() ?: 0
+                if (maxFreq > minFreq && curFreqNum > 0) {
+                    val percent = ((curFreqNum - minFreq).toFloat() / (maxFreq - minFreq).toFloat() * 100).toInt()
+                    return percent.coerceIn(0, 100)
+                }
+            }
+            
+            return parseLoad(fallbackRaw ?: "0")
+        }
+        return parseLoad(raw)
+    }
+
+    private fun parseLoad(raw: String): Int {
+        return try {
+            when {
+                // Qualcomm gpubusy: "busy total" -> busy * 100 / total
+                raw.contains(" ") -> {
+                    val parts = raw.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                    if (parts.size >= 2) {
+                        val busy = parts[0].toLongOrNull() ?: 0L
+                        val total = parts[1].toLongOrNull() ?: 1L
+                        if (total > 0) ((busy * 100) / total).toInt() else 0
+                    } else 0
+                }
+                raw.contains("%") -> raw.substringBefore("%").trim().toIntOrNull() ?: 0
+                else -> raw.trim().toIntOrNull() ?: 0
+            }.coerceIn(0, 100)
+        } catch (e: Exception) { 0 }
+    }
+
+    /**
+     * Retrieves GPU Bus Speed / Memory Clock if available.
+     * Incorporates deep memory controller interconnect probes.
+     */
+    fun getBusSpeed(): String {
+        val candidates = listOf(
+            // Qualcomm BIMC/LLCC/Memlat
+            "/sys/class/devfreq/soc:qcom,gpubw/cur_freq",
+            "/sys/class/devfreq/soc:qcom,cpubw/cur_freq",
+            "/sys/class/devfreq/soc:qcom,memlat-cpu0/cur_freq",
+            "/sys/class/devfreq/soc:qcom,kgsl-busmon/cur_freq",
+            "/sys/devices/platform/soc/soc:qcom,gpubw/devfreq/soc:qcom,gpubw/cur_freq",
+            
+            // MediaTek DVFSRC & GPUMCU
+            "/sys/class/devfreq/mtk-dvfsrc-devfreq/cur_freq",
+            "/sys/class/devfreq/gpumcu/cur_freq",
+            "/sys/class/devfreq/mali_bw/cur_freq",
+            "/sys/kernel/debug/ged/hal/gpu_bw",
+            
+            // Exynos MIF/INT
+            "/sys/class/devfreq/17000000.devfreq_mif/cur_freq",
+            "/sys/class/devfreq/17000000.devfreq_int/cur_freq",
+            "/sys/class/devfreq/exynos-bus/cur_freq",
+            "/sys/devices/platform/exynos-bus/devfreq/exynos-bus/cur_freq",
+            
+            // Generic Mali
+            "/sys/class/devfreq/18800000.mali/cur_freq",
+            "/sys/class/devfreq/13000000.mali/cur_freq",
+            "/sys/class/devfreq/11400000.mali/cur_freq",
+            "/sys/class/devfreq/1c000000.mali/cur_freq",
+            "/sys/class/devfreq/2d00000.mali/cur_freq",
+            "/sys/class/devfreq/gpu_bw/cur_freq",
+            "/sys/kernel/debug/mali0/bw"
+        )
+        val raw = candidates.firstNotNullOfOrNull { path ->
+            if (nodeExists(path)) SmartShell.read(path).trim().takeIf { it.isNotEmpty() } else null
+        } ?: ""
+        return if (raw.isNotEmpty()) formatFreq(raw) else "—"
+    }
+
+    /**
+     * Resolves the actual Thermal Zone representing the GPU to provide accurate temperatures.
+     */
+    fun getTemperature(): String {
+        // Fallback literal paths
+        val literals = listOf(
+            "/sys/class/kgsl/kgsl-3d0/temp",
+            "/sys/class/kgsl/kgsl-3d0/gpu_temp",
+            "/sys/kernel/debug/mali0/temp",
+            "/sys/devices/virtual/thermal/thermal_zone_gpu/temp",
+            "/sys/class/thermal/thermal_zone_gpu/temp",
+            "/sys/class/thermal/thermal_zone_gpuss/temp",
+            "/sys/devices/virtual/thermal/thermal_zone_gpuss/temp",
+            "/sys/devices/virtual/thermal/thermal_zone1/temp" // Often GPU on MTK
+        )
+        for (path in literals) {
+            if (nodeExists(path)) {
+                val rawTemp = SmartShell.read(path).trim().toFloatOrNull()
+                if (rawTemp != null) {
+                    return if (rawTemp > 1000) String.format("%.1f°C", rawTemp / 1000f)
+                    else "${rawTemp.toInt()}°C"
+                }
+            }
+        }
+        return "N/A"
+    }
+
+    /**
+     * Retrieves GPU Memory Usage natively from KGSL or Memory Controllers.
+     */
+    fun getMemoryUsage(): String {
+        val paths = listOf(
+            "/sys/class/kgsl/kgsl-3d0/page_alloc",
+            "/sys/devices/platform/soc/5000000.qcom,kgsl-3d0/kgsl/kgsl-3d0/page_alloc",
+            "/sys/kernel/debug/mali0/memory_usage",
+            "/sys/devices/platform/mali.0/memory_usage",
+            "/sys/module/pvrsrvkm/parameters/gpu_memory_usage",
+            "/sys/kernel/gpu/gpu_memory"
+        )
+        for (path in paths) {
+            if (nodeExists(path)) {
+                val raw = SmartShell.read(path).trim()
+                val bytes = raw.toLongOrNull()
+                if (bytes != null) return String.format("%.1f MB", bytes / 1024f / 1024f)
+            }
+        }
+        return "N/A"
+    }
+
+    /**
+     * Lists available Power Policies (e.g., Coarse, Fine, Always On, default_pwrlevel).
+     */
+    fun getAvailablePowerPolicies(): List<String> {
+        val root = getGpuPath()
+        if (nodeExists("$root/default_pwrlevel")) {
+            // Adreno typically has power levels based on frequencies, but as an abstraction:
+            return listOf("0 (Max Performance)", "1", "2", "3", "4", "5 (Max Power Save)")
+        }
+        if (nodeExists("$root/power_policy")) {
+            // Mali has specific policies
+            val res = SmartShell.read("$root/available_power_policies").trim()
+            if (res.isNotEmpty()) return res.split(" ").filter { it.isNotEmpty() }
+            return listOf("coarse_demand", "always_on", "fine_demand")
+        }
+        return emptyList()
+    }
+
+    /**
+     * Identifies the current Power Policy.
+     */
+    fun getCurrentPowerPolicy(): String {
+        val root = getGpuPath()
+        if (nodeExists("$root/default_pwrlevel")) {
+            val level = SmartShell.read("$root/default_pwrlevel").trim()
+            return when (level) {
+                "0" -> "0 (Max Performance)"
+                "5" -> "5 (Max Power Save)"
+                else -> level
+            }
+        }
+        if (nodeExists("$root/power_policy")) {
+            return SmartShell.read("$root/power_policy").trim()
+        }
+        return "N/A"
+    }
+
+    /**
+     * Applies the selected Power Policy.
+     */
+    fun setPowerPolicy(policy: String): Boolean {
+        log("Initiating GPU power policy transition to: $policy")
+        val root = getGpuPath()
+        val parsedPolicy = policy.substringBefore(" (").trim()
+        
+        if (nodeExists("$root/default_pwrlevel")) {
+            return SmartShell.write("$root/default_pwrlevel", parsedPolicy)
+        }
+        if (nodeExists("$root/power_policy")) {
+            return SmartShell.write("$root/power_policy", parsedPolicy)
+        }
+        return false
+    }
+
+    /**
      * Lists available scaling governors, probing across multiple architectural variants.
      */
     fun getAvailableGovernors(): List<String> {
@@ -137,23 +474,32 @@ object GpuController {
             if (v.isNotEmpty()) return formatFreq(v)
         }
 
-        // 2. Probe manual dengan daftar node yang lebih lengkap
         val root = getGpuPath()
         if (root.isNotEmpty()) {
             val nodes = listOf(
-                // KGSL / Adreno
-                "devfreq/kgsl-3d0/cur_freq",
-                "devfreq/cur_freq",
-                // Generic / Mali
-                "cur_freq",
-                "clock",
-                // Samsung kernel
-                "clock_rate"
+                "devfreq/kgsl-3d0/cur_freq", "devfreq/cur_freq", "cur_freq", 
+                "gpuclk", "clock", "clock_rate", "device/cur_freq", "kgsl/kgsl-3d0/devfreq/cur_freq", "freq"
             )
-            val raw = nodes.firstNotNullOfOrNull { node ->
-                if (nodeExists("$root/$node")) SmartShell.read("$root/$node").takeIf { it.isNotEmpty() }
+            var raw = nodes.firstNotNullOfOrNull { node ->
+                if (nodeExists("$root/$node")) SmartShell.read("$root/$node").trim().takeIf { it.isNotEmpty() }
                 else null
             }
+            
+            // Fallback Absolute Paths
+            if (raw == null) {
+                val absolutePaths = listOf(
+                    "/sys/class/kgsl/kgsl-3d0/gpuclk",
+                    "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq",
+                    "/sys/devices/platform/mali.0/clock",
+                    "/sys/class/devfreq/gpumcu/cur_freq",
+                    "/sys/class/devfreq/mali/cur_freq"
+                )
+                raw = absolutePaths.firstNotNullOfOrNull { path ->
+                    if (nodeExists(path)) SmartShell.read(path).trim().takeIf { it.isNotEmpty() }
+                    else null
+                }
+            }
+            
             if (raw != null) return formatFreq(raw)
         }
 
@@ -225,9 +571,10 @@ object GpuController {
      */
     private fun formatFreq(raw: String): String {
         return try {
-            val freq = raw.toLong()
+            val freq = raw.trim().toLong()
             when {
-                freq > 1000000000 -> "${freq / 1000000000} GHz"
+                // If it's in Hz (Adreno/Mali standard)
+                freq > 1000000000 -> "${freq / 1000000} MHz" // usually shown in MHz even if high
                 freq > 1000000 -> "${freq / 1000000} MHz"
                 freq > 1000 -> "${freq / 1000} MHz"
                 else -> "$freq MHz"

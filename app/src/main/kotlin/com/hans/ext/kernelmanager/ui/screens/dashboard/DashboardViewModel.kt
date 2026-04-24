@@ -13,6 +13,17 @@ import kotlinx.coroutines.launch
 import android.util.Log
 
 /**
+ * DisplayDetail (V1) - Precision screen specifications.
+ */
+data class DisplayDetail(
+    val panel: String = "N/A",
+    val resolution: String = "N/A",
+    val refreshRate: String = "N/A",
+    val density: String = "N/A",
+    val hdr: String = "N/A"
+)
+
+/**
  * DashboardState (V11) - Comprehensive system health and performance state.
  */
 data class DashboardState(
@@ -22,6 +33,11 @@ data class DashboardState(
     val batteryCurrent: String = "0 mA",
     val batteryLevel: Int = 0,
     val isCharging: Boolean = false,
+    val batteryVoltage: String = "0 mV",
+    val batteryHealth: String = "Good",
+    val batteryStatus: String = "Unknown",
+    val batteryTechnology: String = "Li-ion",
+    val batteryCycleCount: String = "0",
     val ramUsage: Float = 0f,
     val ramDetail: String = "",
     val ramTotal: String = "",
@@ -59,7 +75,9 @@ data class DashboardState(
     val bootloader: String = "",
     val baseband: String = "",
     val uptimeFull: String = "",
-    val deepSleepFull: String = ""
+    val deepSleepFull: String = "",
+    val displayDetail: DisplayDetail = DisplayDetail(),
+    val showDisplayDialog: Boolean = false
 )
 
 /**
@@ -72,9 +90,10 @@ class DashboardViewModel : ViewModel() {
     
     private val TAG = "OmnisovereignViewModel"
 
+    private var monitorJob: kotlinx.coroutines.Job? = null
+
     init {
-        log("Omnisovereign Dashboard Engine Initialized.")
-        startMonitoring()
+        log("Omnisovereign Dashboard Engine Initialized. Waiting for lifecycle trigger.")
     }
 
     /**
@@ -96,7 +115,9 @@ class DashboardViewModel : ViewModel() {
      * to prevent querying an empty registry and getting all-null data.
      */
     fun startMonitoring() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        if (monitorJob?.isActive == true) return
+        log("Dashboard Telemetry: Starting...")
+        monitorJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             // Guard: If registry is empty (discovery not yet done), run it now.
             // This handles the race condition between MainActivity's async discover()
             // and ViewModel initialization.
@@ -170,11 +191,15 @@ class DashboardViewModel : ViewModel() {
                     val storagePercent = storageData.first
                     val storageDetail = storageData.second
 
-                    // 8. Charging Status
-                    val batteryStatusPath = registry.subsystems["BATTERY"]?.get("status") ?: ""
-                    val isCharging = if (batteryStatusPath.isNotEmpty())
-                        SmartShell.read(batteryStatusPath).equals("Charging", ignoreCase = true)
-                    else false
+                    // 8. Battery Diagnostics
+                    val batteryLevel = BatteryController.getCapacity()
+                    val batteryCurrent = BatteryController.getCurrentNow()
+                    val batteryVoltage = BatteryController.getVoltage()
+                    val batteryHealth = BatteryController.getHealth()
+                    val batteryStatus = BatteryController.getStatus()
+                    val batteryTech = BatteryController.getTechnology()
+                    val batteryCycles = BatteryController.getCycleCount()
+                    val isCharging = batteryStatus.lowercase().contains("charging")
 
                     // 9. Kernel & System Meta
                     val kernelFull = SmartShell.read("/proc/version")
@@ -198,8 +223,6 @@ class DashboardViewModel : ViewModel() {
                         cpuHistory = newHistory,
                         batteryTemp = temp,
                         batteryCurrent = current,
-                        batteryLevel = BatteryController.getCapacity(),
-                        isCharging = isCharging,
                         ramUsage = ramPercent,
                         ramDetail = "${usedMem / 1024} MB of ${totalMem / 1024} MB used",
                         ramTotal = "${(totalMem + 512000) / 1024 / 1024} GB",
@@ -216,7 +239,21 @@ class DashboardViewModel : ViewModel() {
                         androidVersion = "Android ${android.os.Build.VERSION.RELEASE}",
                         phoneModel = registry.deviceCodename.uppercase(),
                         chipset = heritage.model,
-                        socModel = socModel
+                        socModel = socModel,
+                        batteryLevel = batteryLevel,
+                        batteryVoltage = batteryVoltage,
+                        batteryHealth = batteryHealth,
+                        batteryStatus = batteryStatus,
+                        batteryTechnology = batteryTech,
+                        batteryCycleCount = batteryCycles,
+                        isCharging = isCharging,
+                        displayDetail = DisplayDetail(
+                            panel = DisplayController.getPanelInfo(),
+                            resolution = DisplayController.getResolution(),
+                            refreshRate = DisplayController.getRefreshRate(),
+                            density = DisplayController.getDensity(),
+                            hdr = DisplayController.getHdrCapabilities()
+                        )
                     )
 
                     // 12. Slow Telemetry (Every 30s or first run)
@@ -243,13 +280,22 @@ class DashboardViewModel : ViewModel() {
                             networkType = networkInfo.first
                         )
                     }
-                    
+
+                    kotlinx.coroutines.delay(1000)
                     slowTick++
                 } catch (e: Exception) {
-                    log("Telemetry Error: ${e.message}")
+                    log("Error in telemetry loop: ${e.message}")
+                    kotlinx.coroutines.delay(2000) // Backoff on error
                 }
-                delay(1000)
             }
+        }
+    }
+
+    fun stopMonitoring() {
+        if (monitorJob?.isActive == true) {
+            log("Dashboard Telemetry: Stopping...")
+            monitorJob?.cancel()
+            monitorJob = null
         }
     }
 
@@ -266,7 +312,7 @@ class DashboardViewModel : ViewModel() {
     fun triggerReDiscovery() {
         viewModelScope.launch {
             log("Emergency hardware re-discovery initiated.")
-            SystemDiscovery.discover()
+            SystemDiscovery.refreshRegistry()
         }
     }
 
@@ -278,5 +324,13 @@ class DashboardViewModel : ViewModel() {
             val success = TuningOrchestrator.performOmniAudit()
             log("System Health Audit Result: ${if (success) "PASS" else "FAIL"}")
         }
+    }
+
+    fun showDisplayDetail() {
+        _state.value = _state.value.copy(showDisplayDialog = true)
+    }
+
+    fun hideDisplayDetail() {
+        _state.value = _state.value.copy(showDisplayDialog = false)
     }
 }

@@ -171,13 +171,97 @@ object DisplayController {
     fun getAuditHistory(): List<String> = displayAudit.toList()
 
     /**
+     * Retrieves the physical display resolution.
+     */
+    fun getResolution(): String {
+        val raw = SmartShell.sh("wm size")
+        return raw.substringAfter("Physical size: ").trim().ifEmpty { 
+            val densityRaw = SmartShell.sh("getprop ro.sf.lcd_density").trim()
+            "N/A (Density: $densityRaw)"
+        }
+    }
+
+    /**
+     * Retrieves the current display refresh rate using a multi-stage fallback.
+     */
+    fun getRefreshRate(): String {
+        // 1. Try SurfaceFlinger (Often most accurate for active rate)
+        val sf = SmartShell.sh("dumpsys SurfaceFlinger | grep -i 'refresh-rate'").trim()
+        if (sf.isNotEmpty()) {
+            val match = Regex("(\\d+\\.?\\d*)").find(sf)
+            match?.value?.toDoubleOrNull()?.let { return "${it.toInt()} Hz" }
+        }
+
+        // 2. Try Display Default Mode
+        val display = SmartShell.sh("dumpsys display | grep 'mDefaultModeId'").trim()
+        if (display.isNotEmpty()) {
+            val modeId = display.substringAfter("mDefaultModeId=").substringBefore(",").trim()
+            val modes = SmartShell.sh("dumpsys display | grep 'id=$modeId'").trim()
+            val fpsMatch = Regex("fps=(\\d+\\.?\\d*)").find(modes)
+            fpsMatch?.groupValues?.get(1)?.toDoubleOrNull()?.let { return "${it.toInt()} Hz" }
+        }
+
+        // 3. Try Global FPS grep
+        val raw = SmartShell.sh("dumpsys display | grep -E 'fps|mRefreshRate'").trim()
+        val fps = Regex("(\\d{2,3}\\.\\d+)").findAll(raw)
+            .mapNotNull { it.value.toDoubleOrNull() }
+            .firstOrNull { it > 10 }
+        
+        if (fps != null) return "${fps.toInt()} Hz"
+
+        // 4. Try OEM Specific Props
+        val props = listOf(
+            "ro.surface_flinger.display_primary_red",
+            "persist.vendor.power.dfps.level",
+            "ro.vendor.display.default_fps"
+        )
+        for (p in props) {
+            val v = SmartShell.sh("getprop $p").trim()
+            if (v.isNotEmpty() && v.first().isDigit()) return "$v Hz"
+        }
+
+        return "60 Hz"
+    }
+
+    /**
+     * Retrieves screen density (DPI).
+     */
+    fun getDensity(): String {
+        val prop = SmartShell.sh("getprop ro.sf.lcd_density").trim()
+        return if (prop.isNotEmpty()) "$prop dpi" else "N/A"
+    }
+
+    /**
+     * Tries to identify the panel type or vendor via sysfs or logcat.
+     */
+    fun getPanelInfo(): String {
+        val dmesg = SmartShell.sh("dmesg | grep -i panel").lowercase()
+        return when {
+            dmesg.contains("samsung") -> "Samsung OLED"
+            dmesg.contains("boe") -> "BOE Panel"
+            dmesg.contains("lgd") -> "LG Display"
+            dmesg.contains("tianma") -> "Tianma LCD"
+            else -> "Generic Panel"
+        }
+    }
+
+    /**
+     * Checks for HDR capabilities.
+     */
+    fun getHdrCapabilities(): String {
+        val raw = SmartShell.sh("dumpsys display | grep -i hdr").trim()
+        return if (raw.contains("HDR10")) "HDR10 supported" else "Standard Dynamic Range"
+    }
+
+    /**
      * Generates a professional technical report of the display subsystem.
      */
     fun getDisplayReport(): String {
-        return "Panel Tech: KCAL Compatible\n" +
-               "Calibration: ${if (isKcalAvailable()) "Active" else "Restricted"}\n" +
-               "Saturation: ${getSaturation()}\n" +
-               "RGB Balance: ${getRgb()}"
+        return "Panel Tech: ${getPanelInfo()}\n" +
+               "Resolution: ${getResolution()}\n" +
+               "Refresh Rate: ${getRefreshRate()}\n" +
+               "Density: ${getDensity()}\n" +
+               "HDR: ${getHdrCapabilities()}"
     }
 
     /**

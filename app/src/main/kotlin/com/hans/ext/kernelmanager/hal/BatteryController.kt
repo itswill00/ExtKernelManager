@@ -43,8 +43,42 @@ object BatteryController {
      */
     fun getCurrentNow(): String {
         val path = getBatteryMap()["current_now"] ?: return "0 mA"
-        val raw = SmartShell.read(path)
-        return if (raw.isNotEmpty()) "${raw.toInt() / 1000} mA" else "0 mA"
+        val raw = SmartShell.read(path).toLongOrNull() ?: 0L
+        // Current can be in microAmps or milliAmps depending on kernel
+        return if (raw > 100000 || raw < -100000) "${raw / 1000} mA" else "$raw mA"
+    }
+
+    /**
+     * Retrieves the real-time battery voltage in mV.
+     */
+    fun getVoltage(): String {
+        val path = getBatteryMap()["voltage_now"] ?: return "0 mV"
+        val raw = SmartShell.read(path).toLongOrNull() ?: 0L
+        return if (raw > 1000000) "${raw / 1000} mV" else "$raw mV"
+    }
+
+    /**
+     * Retrieves the charging status (Charging, Discharging, Full, etc.)
+     */
+    fun getStatus(): String {
+        val path = getBatteryMap()["status"] ?: return "Unknown"
+        return SmartShell.read(path).ifEmpty { "Unknown" }
+    }
+
+    /**
+     * Retrieves the hardware-reported health status.
+     */
+    fun getHealth(): String {
+        val path = getBatteryMap()["health"] ?: return "Good"
+        return SmartShell.read(path).ifEmpty { "Good" }
+    }
+
+    /**
+     * Retrieves battery technology (Li-ion, Li-poly, etc.)
+     */
+    fun getTechnology(): String {
+        val path = getBatteryMap()["technology"] ?: return "Li-ion"
+        return SmartShell.read(path).ifEmpty { "Li-ion" }
     }
 
     /**
