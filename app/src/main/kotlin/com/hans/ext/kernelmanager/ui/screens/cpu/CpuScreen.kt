@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -23,11 +24,15 @@ private val cardRadius = RoundedCornerShape(24.dp)
 private val innerRadius = RoundedCornerShape(16.dp)
 
 @Composable
-fun CpuScreen(viewModel: CpuViewModel = viewModel()) {
+fun CpuScreen(
+    viewModel: CpuViewModel = viewModel(),
+    onMoreClick: () -> Unit = {},
+    bottomPadding: Dp = 0.dp
+) {
     val state by viewModel.state.collectAsState()
 
     Scaffold(
-        topBar         = { AppTopBar(title = "CPU Core Control", onRefresh = { viewModel.refresh() }) },
+        topBar         = { AppTopBar(title = "Processor Tuning", onMoreClick = onMoreClick) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
 
@@ -40,19 +45,19 @@ fun CpuScreen(viewModel: CpuViewModel = viewModel()) {
 
         LazyColumn(
             modifier            = Modifier.fillMaxSize().padding(padding),
-            contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding      = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottomPadding + 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 1. Core Monitor
             item {
-                SectionLabel("Core activity")
+                SectionLabel("Realtime core load")
                 Spacer(Modifier.height(6.dp))
                 CoreMonitorCard(state.coreFrequencies)
             }
 
             // 2. Clusters
             item {
-                SectionLabel("Core clusters")
+                SectionLabel("Hardware clusters")
                 Spacer(Modifier.height(6.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     state.policies.forEach { p ->
@@ -75,17 +80,17 @@ fun CpuScreen(viewModel: CpuViewModel = viewModel()) {
 
             // 3. Maintenance
             item {
-                SectionLabel("Quick actions")
+                SectionLabel("System tools")
                 Spacer(Modifier.height(6.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(), shape = cardRadius,
                     colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ActionChip(label = "Run system health check", modifier = Modifier.fillMaxWidth()) {
+                        ActionChip(label = "Audit System Integrity", modifier = Modifier.fillMaxWidth()) {
                             // Logic placeholder
                         }
-                        ActionChip(label = "Reset all settings to default", modifier = Modifier.fillMaxWidth()) {
+                        ActionChip(label = "Restore Factory Defaults", modifier = Modifier.fillMaxWidth()) {
                             for (p in state.policies) {
                                 viewModel.setGovernor(p, "schedutil")
                                 val freqs = state.availableFreqs[p] ?: continue
@@ -99,7 +104,7 @@ fun CpuScreen(viewModel: CpuViewModel = viewModel()) {
                 }
             }
 
-            item { Spacer(Modifier.height(32.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 }
@@ -219,10 +224,16 @@ private fun DropdownField(label: String, selected: String, options: List<String>
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenu(
+                expanded = expanded, 
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 300.dp)
+            ) {
                 options.forEach { opt ->
-                    DropdownMenuItem(text = { Text(opt, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) },
-                        onClick = { onSelect(opt); expanded = false })
+                    DropdownMenuItem(
+                        text = { Text(opt, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) },
+                        onClick = { onSelect(opt); expanded = false }
+                    )
                 }
             }
         }

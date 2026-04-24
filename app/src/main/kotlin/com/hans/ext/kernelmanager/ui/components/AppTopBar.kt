@@ -1,7 +1,8 @@
 package com.hans.ext.kernelmanager.ui.components
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -17,7 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 @Composable
 fun AppTopBar(
     title: String,
-    onRefresh: (() -> Unit)? = null
+    onMoreClick: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null
 ) {
     TopAppBar(
         title = {
@@ -28,12 +30,23 @@ fun AppTopBar(
                 color = MaterialTheme.colorScheme.onSurface
             )
         },
-        actions = {
-            if (onRefresh != null) {
-                IconButton(onClick = onRefresh) {
+        navigationIcon = {
+            if (onBack != null) {
+                IconButton(onClick = onBack) {
                     Icon(
-                        imageVector        = Icons.Default.Refresh,
-                        contentDescription = "Refresh",
+                        imageVector        = Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint               = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        },
+        actions = {
+            if (onMoreClick != null) {
+                IconButton(onClick = onMoreClick) {
+                    Icon(
+                        imageVector        = Icons.Default.MoreVert,
+                        contentDescription = "More",
                         tint               = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -43,7 +56,6 @@ fun AppTopBar(
             containerColor         = MaterialTheme.colorScheme.background,
             titleContentColor      = MaterialTheme.colorScheme.onSurface,
             actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant
-        ),
-        windowInsets = WindowInsets(0, 0, 0, 0)
+        )
     )
 }

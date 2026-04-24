@@ -3,11 +3,17 @@ package com.hans.ext.kernelmanager.ui.screens.dashboard
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,40 +27,73 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hans.ext.kernelmanager.ui.components.AppTopBar
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
 private val cardRadius = RoundedCornerShape(24.dp)
 private val innerRadius = RoundedCornerShape(16.dp)
 
 @Composable
-fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
+fun DashboardScreen(
+    viewModel: DashboardViewModel = viewModel(),
+    onMoreClick: () -> Unit = {},
+    bottomPadding: Dp = 0.dp
+) {
     val state by viewModel.state.collectAsState()
+    var showBatteryDialog by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        viewModel.startMonitoring()
+        onDispose {
+            viewModel.stopMonitoring()
+        }
+    }
+
+    if (showBatteryDialog) {
+        BatteryDetailDialog(state) { showBatteryDialog = false }
+    }
+
+    if (state.showDisplayDialog) {
+        DisplayDetailDialog(state.displayDetail) { viewModel.hideDisplayDetail() }
+    }
 
     Scaffold(
-        topBar         = { AppTopBar(title = "Overview", onRefresh = { viewModel.startMonitoring() }) },
+        topBar         = { AppTopBar(title = "Overview", onMoreClick = onMoreClick) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         LazyColumn(
             modifier            = Modifier.fillMaxSize().padding(padding),
-            contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding      = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottomPadding + 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 1. Identity Hero
-            item { DeviceHero(state) }
+            item { 
+                DeviceHero(
+                    deviceName = state.deviceName,
+                    chipset = state.chipset,
+                    phoneModel = state.phoneModel,
+                    androidVersion = state.androidVersion
+                ) 
+            }
 
             // 2. Vitals Strip
             item {
                 Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     VitalCard(
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label    = "Power",
-                        value    = "${state.batteryLevel}%",
-                        sub      = if (state.isCharging) "Charging" else state.batteryTemp,
+                        modifier = Modifier.weight(1f).fillMaxHeight().clickable { showBatteryDialog = true },
+                        label    = "Battery",
+                        value    = state.batteryCurrent,
+                        sub      = "${state.batteryLevel}% · ${state.batteryTemp}",
                         highlight = state.batteryLevel <= 20
                     )
+                    val memFree = state.ramDetail.split(" of ").firstOrNull()?.replace(" MB", "")?.toIntOrNull()
+                    val totalMem = state.ramDetail.split(" of ").getOrNull(1)?.replace(" MB used", "")?.toIntOrNull()
+                    val freeGb = if (memFree != null && totalMem != null) String.format("%.1f GB", (totalMem - memFree) / 1024f) else "N/A"
                     VitalCard(
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label    = "System",
-                        value    = state.uptime,
-                        sub      = "Deep sleep: ${state.deepSleep}",
+                        modifier = Modifier.weight(1f),
+                        label    = "Free Memory",
+                        value    = freeGb,
+                        sub      = "Available RAM",
                         highlight = false
                     )
                 }
@@ -62,26 +101,52 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
 
             // 3. Pulse (System Activity)
             item {
-                SectionLabel("System activity")
+                SectionLabel("System")
                 Spacer(Modifier.height(6.dp))
-                PulseCard(state)
+                PulseCard(
+                    cpuLoad = state.cpuLoad,
+                    cpuTemp = state.cpuTemp,
+                    gpuFreq = state.gpuFreq,
+                    gpuTemp = state.gpuTemp,
+                    cpuFrequencies = state.cpuFrequencies
+                )
             }
 
             // 4. Resources (Bento Style)
             item {
-                SectionLabel("Resource overview")
+                SectionLabel("Resources")
                 Spacer(Modifier.height(6.dp))
-                ResourceBento(state)
+                ResourceBento(
+                    ramDetail = state.ramDetail,
+                    ramUsage = state.ramUsage,
+                    appCount = state.appCount,
+                    displayStats = state.displayStats,
+                    storageDetail = state.storageDetail,
+                    storageUsage = state.storageUsage,
+                    onDisplayClick = { viewModel.showDisplayDetail() }
+                )
             }
 
             // 5. System Details
             item {
-                SectionLabel("About system")
+                SectionLabel("About")
                 Spacer(Modifier.height(6.dp))
-                SystemDetails(state)
+                SystemDetails(
+                    kernelVersion = state.kernelVersion,
+                    buildNumber = state.buildNumber,
+                    uptimeFull = state.uptimeFull,
+                    deepSleepFull = state.deepSleepFull,
+                    selinuxStatus = state.selinuxStatus,
+                    baseband = state.baseband,
+                    bootloader = state.bootloader,
+                    securityPatch = state.securityPatch,
+                    ioScheduler = state.ioScheduler,
+                    zramEnabled = state.zramEnabled,
+                    zramSize = state.zramSize
+                )
             }
 
-            item { Spacer(Modifier.height(32.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 }
@@ -89,32 +154,21 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
 // ── Components ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun DeviceHero(state: DashboardState) {
+private fun DeviceHero(deviceName: String, chipset: String, phoneModel: String, androidVersion: String) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape    = cardRadius,
         colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(
-            modifier              = Modifier.padding(20.dp),
-            verticalAlignment     = Alignment.CenterVertically,
+            modifier = Modifier.padding(24.dp),
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Box(
-                modifier         = Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    state.deviceName.firstOrNull()?.toString() ?: "?",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
             Column(modifier = Modifier.weight(1f)) {
-                Text(state.deviceName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
-                Text("${state.chipset} · ${state.phoneModel} · arm64-v8a", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(state.androidVersion, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
+                Text(deviceName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                Text("$chipset · $phoneModel", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(androidVersion, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
             }
         }
     }
@@ -141,31 +195,37 @@ private fun VitalCard(modifier: Modifier, label: String, value: String, sub: Str
 }
 
 @Composable
-private fun PulseCard(state: DashboardState) {
+private fun PulseCard(cpuLoad: Int, cpuTemp: String, gpuFreq: String, gpuTemp: String, cpuFrequencies: Map<Int, String>) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape    = cardRadius,
         colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            val maxCpuFreqStr = cpuFrequencies.values
+                .mapNotNull { it.replace(" MHz", "").toIntOrNull() }
+                .maxOrNull()?.let { 
+                    if (it >= 1000) String.format("%.1f GHz", it / 1000f) else "$it MHz"
+                } ?: "N/A"
+
             // Main Performance Row
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text("Total Load", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    Text("${state.cpuLoad}%", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-                    Text(state.cpuTemp, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("CPU Core", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text(maxCpuFreqStr, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+                    Text(cpuTemp, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Column(Modifier.weight(1f)) {
                     Text("Graphics", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                    Text(state.gpuFreq, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Text(state.gpuTemp, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(gpuFreq, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text(gpuTemp, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
             HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
             // Dynamic Core Grid
-            val policies = state.cpuFrequencies.keys.sorted()
+            val policies = cpuFrequencies.keys.sorted()
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 policies.chunked(2).forEach { row ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -177,7 +237,10 @@ private fun PulseCard(state: DashboardState) {
                                     policies.size >= 3 -> when (p) { 0 -> "Little"; 1 -> "Big"; else -> "Prime" }
                                     else -> "Cluster $p"
                                 },
-                                freq     = state.cpuFrequencies[p] ?: "—"
+                                freq     = (cpuFrequencies[p] ?: "—").let {
+                                    val f = it.toIntOrNull()
+                                    if (f != null) String.format("%.1f GHz", f / 1000f) else it
+                                }
                             )
                         }
                         if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -202,21 +265,25 @@ private fun CorePill(modifier: Modifier, label: String, freq: String) {
             verticalAlignment     = Alignment.CenterVertically
         ) {
             Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-            Text(freq.replace(" MHz", ""), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+            Text(freq, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
 
 @Composable
-private fun ResourceBento(state: DashboardState) {
+private fun ResourceBento(
+    ramDetail: String, ramUsage: Float, appCount: String, 
+    displayStats: String, storageDetail: String, storageUsage: Float,
+    onDisplayClick: () -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Memory", state.ramDetail, state.ramUsage)
-            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Apps", state.appCount, 0f, showProgress = false)
+            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Memory", ramDetail, ramUsage)
+            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Apps", appCount, 0f, showProgress = false)
         }
         Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Display", state.displayStats, 0f, showProgress = false)
-            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Storage", state.storageDetail.ifEmpty { "Scanning..." }, state.storageUsage)
+            BentoBox(Modifier.weight(1f).fillMaxHeight().clickable { onDisplayClick() }, "Display", displayStats, 0f, showProgress = false)
+            BentoBox(Modifier.weight(1f).fillMaxHeight(), "Storage", storageDetail.ifEmpty { "Scanning..." }, storageUsage)
         }
     }
 }
@@ -245,27 +312,32 @@ private fun BentoBox(modifier: Modifier, label: String, value: String, progress:
 }
 
 @Composable
-private fun SystemDetails(state: DashboardState) {
+private fun SystemDetails(
+    kernelVersion: String, buildNumber: String, uptimeFull: String, deepSleepFull: String,
+    selinuxStatus: String, baseband: String, bootloader: String, securityPatch: String,
+    ioScheduler: String, zramEnabled: Boolean, zramSize: String
+) {
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape    = cardRadius,
         colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-            SpecRow("Kernel", state.kernelVersion)
-            SpecRow("Build", state.buildNumber)
-            SpecRow("Uptime", state.uptimeFull)
-            SpecRow("Deep sleep", state.deepSleepFull)
-            SpecRow("SELinux", state.selinuxStatus)
-            SpecRow("Baseband", state.baseband)
-            SpecRow("Bootloader", state.bootloader)
-            SpecRow("Security patch", state.securityPatch)
-            SpecRow("I/O scheduler", state.ioScheduler)
-            if (state.zramEnabled) SpecRow("ZRAM", state.zramSize)
+            SpecRow("Kernel", kernelVersion)
+            SpecRow("Build", buildNumber)
+            SpecRow("Uptime", uptimeFull)
+            SpecRow("Deep sleep", deepSleepFull)
+            SpecRow("SELinux", selinuxStatus)
+            SpecRow("Baseband", baseband)
+            SpecRow("Bootloader", bootloader)
+            SpecRow("Security patch", securityPatch)
+            SpecRow("I/O scheduler", ioScheduler)
+            if (zramEnabled) SpecRow("ZRAM", zramSize)
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SpecRow(label: String, value: String) {
     Row(
@@ -281,7 +353,9 @@ private fun SpecRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .basicMarquee(iterations = Int.MAX_VALUE),
             textAlign = androidx.compose.ui.text.style.TextAlign.End
         )
     }
@@ -294,5 +368,105 @@ private fun SectionLabel(text: String) {
         style    = MaterialTheme.typography.labelMedium.copy(letterSpacing = 0.8.sp, fontWeight = FontWeight.Black),
         color    = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 4.dp)
+    )
+}
+
+@Composable
+private fun BatteryDetailDialog(state: DashboardState, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Battery Diagnostics", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text("Hardware Telemetry", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Visual Charge Bar
+                val animLevel by animateFloatAsState(targetValue = state.batteryLevel / 100f, animationSpec = tween(1000), label = "bat")
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LinearProgressIndicator(
+                        progress = { animLevel },
+                        modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.height(4.dp))
+                InfoRowDetail("Status", state.batteryStatus)
+                InfoRowDetail("Current", state.batteryCurrent)
+                InfoRowDetail("Voltage", state.batteryVoltage)
+                InfoRowDetail("Level", "${state.batteryLevel}%")
+                InfoRowDetail("Temperature", state.batteryTemp)
+                InfoRowDetail("Health", state.batteryHealth)
+                InfoRowDetail("Cycle Count", state.batteryCycleCount)
+                InfoRowDetail("Technology", state.batteryTechnology)
+            }
+        },
+        shape = cardRadius,
+        containerColor = MaterialTheme.colorScheme.surface
+    )
+}
+
+@Composable
+private fun InfoRowDetail(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+@Composable
+private fun DisplayDetailDialog(detail: DisplayDetail, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("D", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                }
+                Text("Display Specifications", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("Precision hardware data polled directly from system services and kernel logs.", 
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                
+                Surface(
+                    shape = innerRadius,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        SpecRow("Panel Info", detail.panel)
+                        SpecRow("Resolution", detail.resolution)
+                        SpecRow("Refresh Rate", detail.refreshRate)
+                        SpecRow("Density", detail.density)
+                        SpecRow("HDR Support", detail.hdr)
+                    }
+                }
+            }
+        },
+        shape = cardRadius,
+        containerColor = MaterialTheme.colorScheme.surface
     )
 }

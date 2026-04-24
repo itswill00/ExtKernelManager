@@ -10,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -19,11 +20,15 @@ private val cardRadius = RoundedCornerShape(24.dp)
 private val innerRadius = RoundedCornerShape(16.dp)
 
 @Composable
-fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
+fun IoMemScreen(
+    viewModel: IoMemViewModel = viewModel(),
+    onMoreClick: () -> Unit = {},
+    bottomPadding: Dp = 0.dp
+) {
     val state by viewModel.state.collectAsState()
 
     Scaffold(
-        topBar         = { AppTopBar(title = "I/O & Memory", onRefresh = { viewModel.refresh() }) },
+        topBar         = { AppTopBar(title = "Kernel Tuning", onMoreClick = onMoreClick) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
 
@@ -36,7 +41,7 @@ fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
 
         LazyColumn(
             modifier            = Modifier.fillMaxSize().padding(padding),
-            contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            contentPadding      = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottomPadding + 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // ── Storage ──────────────────────────────────────────────────────
@@ -106,22 +111,77 @@ fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
                             minLabel = "Keep cache",
                             maxLabel = "Purge cache"
                         )
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        val dirtyInt = state.dirtyRatio.toIntOrNull() ?: 20
+                        TuningSlider(
+                            label    = "Dirty Ratio (%)",
+                            value    = dirtyInt.toFloat(),
+                            range    = 0f..100f,
+                            onChange = { viewModel.setDirtyRatio(it.toInt()) },
+                            minLabel = "Aggressive",
+                            maxLabel = "Delay"
+                        )
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        val dirtyBgInt = state.dirtyBackgroundRatio.toIntOrNull() ?: 10
+                        TuningSlider(
+                            label    = "Dirty Background Ratio (%)",
+                            value    = dirtyBgInt.toFloat(),
+                            range    = 0f..100f,
+                            onChange = { viewModel.setDirtyBackgroundRatio(it.toInt()) },
+                            minLabel = "Aggressive",
+                            maxLabel = "Delay"
+                        )
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        Button(
+                            onClick = { viewModel.dropCaches() },
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = innerRadius,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer)
+                        ) {
+                            Text("Drop Caches (Free RAM)", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
-
-            // ── Low Memory Killer ────────────────────────────────────────────
+            
+            // ── Networking ───────────────────────────────────────────────────
             item {
-                SectionLabel("App management")
+                SectionLabel("Network subsystem")
                 Spacer(Modifier.height(6.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(), shape = cardRadius,
                     colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("Low Memory Killer profile", style = MaterialTheme.typography.titleSmall,
+                        DropdownField(
+                            label    = "TCP Congestion Algorithm",
+                            selected = state.currentTcpAlgo,
+                            options  = state.availableTcpAlgos,
+                            onSelect = { viewModel.setTcpAlgorithm(it) }
+                        )
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        DropdownField(
+                            label    = "Explicit Congestion Notification (ECN)",
+                            selected = state.ecnState,
+                            options  = listOf("0 (Disabled)", "1 (Enabled)", "2 (Request)"),
+                            onSelect = { viewModel.setEcnState(it.substringBefore(" ")) }
+                        )
+                    }
+                }
+            }
+
+            // ── Memory Reclaiming ──────────────────────────────────────────
+            item {
+                SectionLabel("Process management")
+                Spacer(Modifier.height(6.dp))
+                ElevatedCard(
+                    modifier = Modifier.fillMaxWidth(), shape = cardRadius,
+                    colors   = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("Memory Reclaiming policy", style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-                        Text("Determines when the system should terminate background apps to free up resources.",
+                        Text("Control how aggressively the system clears background apps to keep your experience smooth.",
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             LmkChip("Light", Modifier.weight(1f).fillMaxHeight()) { viewModel.applyLmkProfile("light") }
@@ -130,7 +190,7 @@ fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
                         }
                         if (state.lmkMinfree.isNotEmpty() && state.lmkMinfree != "N/A") {
                             HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                            Text("Current termination thresholds", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            Text("Active memory thresholds", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
                                 state.lmkMinfree.split(",").joinToString("  ·  ") {
@@ -145,7 +205,7 @@ fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
                 }
             }
 
-            // ── ZRAM ─────────────────────────────────────────────────────────
+            // ── Swap & ZRAM ─────────────────────────────────────────────────
             item {
                 SectionLabel("Virtual memory")
                 Spacer(Modifier.height(6.dp))
@@ -174,18 +234,30 @@ fun IoMemScreen(viewModel: IoMemViewModel = viewModel()) {
                         }
                         if (state.isZramEnabled) {
                             HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                            DropdownField(
-                                label    = "Compression algorithm",
-                                selected = state.zramAlgo,
-                                options  = listOf("lzo", "lz4", "zstd", "lzo-rle"),
-                                onSelect = { viewModel.setZramAlgo(it) }
-                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    DropdownField(
+                                        label    = "Compression",
+                                        selected = state.zramAlgo,
+                                        options  = listOf("lzo", "lz4", "zstd", "lzo-rle"),
+                                        onSelect = { viewModel.setZramAlgo(it) }
+                                    )
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    DropdownField(
+                                        label    = "Disk Size",
+                                        selected = state.zramSize,
+                                        options  = listOf("512 MB", "1024 MB", "1536 MB", "2048 MB", "3072 MB", "4096 MB"),
+                                        onSelect = { viewModel.setZramSize(it.substringBefore(" ").toIntOrNull() ?: 1024) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            item { Spacer(Modifier.height(32.dp)) }
+            item { Spacer(Modifier.height(8.dp)) }
         }
     }
 }
@@ -215,10 +287,16 @@ private fun DropdownField(label: String, selected: String, options: List<String>
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenu(
+                expanded = expanded, 
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 300.dp)
+            ) {
                 options.forEach { opt ->
-                    DropdownMenuItem(text = { Text(opt, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) },
-                        onClick = { onSelect(opt); expanded = false })
+                    DropdownMenuItem(
+                        text = { Text(opt, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) },
+                        onClick = { onSelect(opt); expanded = false }
+                    )
                 }
             }
         }

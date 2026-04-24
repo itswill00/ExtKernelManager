@@ -31,6 +31,8 @@ import com.hans.ext.kernelmanager.ui.screens.iomem.IoMemScreen
 import com.hans.ext.kernelmanager.ui.screens.more.MoreScreen
 import com.hans.ext.kernelmanager.ui.screens.onboarding.OnboardingScreen
 import com.hans.ext.kernelmanager.ui.theme.ExtKernelManagerTheme
+import com.hans.ext.kernelmanager.ui.components.AppDrawer
+import com.hans.ext.kernelmanager.util.SmartShell
 import com.topjohnwu.superuser.Shell
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -92,7 +94,7 @@ fun RootErrorScreen() {
             )
             Spacer(Modifier.height(20.dp))
             Text(
-                text       = "Root access required",
+                text       = "Superuser Access Needed",
                 style      = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 color      = MaterialTheme.colorScheme.onSurface,
@@ -100,7 +102,7 @@ fun RootErrorScreen() {
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text       = "To control CPU frequencies, GPU governors, and memory tuning, this app needs root. Please grant permissions in Magisk or KernelSU and relaunch.",
+                text       = "We need root permission to interact with your system's hardware. Please grant access in Magisk or KernelSU to unlock these features.",
                 style      = MaterialTheme.typography.bodyMedium,
                 color      = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign  = TextAlign.Center
@@ -125,51 +127,80 @@ fun MainContent() {
         NavItem("dashboard", "Home")      { Icon(Icons.Default.Home,     "Home") },
         NavItem("cpu",       "CPU")       { Icon(Icons.Default.Build,    "CPU") },
         NavItem("gpu",       "GPU")       { Icon(Icons.Default.Settings, "GPU") },
-        NavItem("iomem",     "I/O & Mem") { Icon(Icons.Default.Refresh,  "I/O") },
-        NavItem("more",      "More")      { Icon(Icons.Default.Menu,     "More") }
+        NavItem("iomem",     "Kernel")    { Icon(Icons.Default.Refresh,  "Kernel") }
     )
+    
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    var showLicense by remember { mutableStateOf(false) }
+
+    if (showLicense) {
+        androidx.activity.compose.BackHandler { showLicense = false }
+        MoreScreen(onBack = { showLicense = false })
+        return
+    }
     
     val pagerState = rememberPagerState(pageCount = { navItems.size })
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp
-            ) {
-                navItems.forEachIndexed { index, item ->
-                    NavigationBarItem(
-                        selected = pagerState.currentPage == index,
-                        onClick  = {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(index)
-                            }
-                        },
-                        icon  = { item.icon() },
-                        label = { Text(item.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor   = MaterialTheme.colorScheme.primary,
-                            selectedTextColor   = MaterialTheme.colorScheme.primary,
-                            indicatorColor      = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            AppDrawer(onAction = { action ->
+                coroutineScope.launch {
+                    drawerState.close()
+                    when (action) {
+                        "reboot" -> SmartShell.sh("reboot")
+                        "recovery" -> SmartShell.sh("reboot recovery")
+                        "shutdown" -> SmartShell.sh("reboot -p")
+                        "license" -> showLicense = true
+                        else -> { /* Placeholder for Logs/Terminal */ }
+                    }
+                }
+            })
+        }
+    ) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp,
+                    windowInsets = NavigationBarDefaults.windowInsets
+                ) {
+                    navItems.forEachIndexed { index, item ->
+                        NavigationBarItem(
+                            selected = pagerState.currentPage == index,
+                            onClick  = {
+                                coroutineScope.launch {
+                                    pagerState.animateScrollToPage(index)
+                                }
+                            },
+                            icon  = { item.icon() },
+                            label = { Text(item.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor   = MaterialTheme.colorScheme.primary,
+                                selectedTextColor   = MaterialTheme.colorScheme.primary,
+                                indicatorColor      = MaterialTheme.colorScheme.primaryContainer,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         )
-                    )
+                    }
                 }
             }
-        }
-    ) { padding ->
-        HorizontalPager(
-            state    = pagerState,
-            modifier = Modifier.fillMaxSize().padding(padding)
-        ) { page ->
-            when (page) {
-                0 -> DashboardScreen()
-                1 -> CpuScreen()
-                2 -> GpuScreen()
-                3 -> IoMemScreen()
-                4 -> MoreScreen()
+        ) { padding ->
+            HorizontalPager(
+                state    = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                val openDrawer = { coroutineScope.launch { drawerState.open() } }
+                val bPadding = padding.calculateBottomPadding()
+                when (page) {
+                    0 -> DashboardScreen(onMoreClick = { openDrawer() }, bottomPadding = bPadding)
+                    1 -> CpuScreen(onMoreClick = { openDrawer() }, bottomPadding = bPadding)
+                    2 -> GpuScreen(onMoreClick = { openDrawer() }, bottomPadding = bPadding)
+                    3 -> IoMemScreen(onMoreClick = { openDrawer() }, bottomPadding = bPadding)
+                }
             }
         }
     }

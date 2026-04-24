@@ -36,7 +36,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
             
             Text(
-                text = "Full Control Acknowledgement",
+                text = "Terms of Engagement",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
@@ -45,7 +45,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "Ext Kernel Manager interfaces directly with your system's core. While this unlocks powerful tuning capabilities, improper adjustments can lead to instability. We recommend caution and baseline testing.",
+                text = "Ext Kernel gives you direct control over your system's internals. This is powerful but requires care. Improper settings can affect stability, so we recommend starting with small adjustments.",
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -59,7 +59,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 )
             ) {
                 Text(
-                    text = "I acknowledge that I am responsible for how I use these tools. The software is provided as-is, and the developer is not liable for system-wide issues resulting from its use.",
+                    text = "I understand that I am responsible for my own hardware. The developer provides this tool 'as-is' and is not responsible for any issues resulting from its use.",
                     modifier = Modifier.padding(16.dp),
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
@@ -73,7 +73,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium
             ) {
-                Text("Proceed to Dashboard")
+                Text("Get Started")
             }
         }
     }

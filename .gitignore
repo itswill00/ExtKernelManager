@@ -39,3 +39,6 @@ local.properties
 *~
 *.swp
 *.bak
+
+# Local builds
+builds/

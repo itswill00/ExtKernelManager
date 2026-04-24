@@ -22,18 +22,19 @@ import com.hans.ext.kernelmanager.ui.components.AppTopBar
 private val cardShape = RoundedCornerShape(16.dp)
 
 @Composable
-fun MoreScreen() {
+fun MoreScreen(onBack: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val registry = com.hans.ext.kernelmanager.hal.intelligence.SystemDiscovery.getRegistry()
     var showLicense by remember { mutableStateOf(false) }
 
     if (showLicense) {
+        androidx.activity.compose.BackHandler { showLicense = false }
         LicenseScreen(onBack = { showLicense = false })
         return
     }
 
     Scaffold(
-        topBar = { AppTopBar(title = "More") },
+        topBar = { AppTopBar(title = "More", onBack = onBack) },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         LazyColumn(
